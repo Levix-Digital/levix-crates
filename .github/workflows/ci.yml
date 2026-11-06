@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect crates
+        id: crates
+        run: |
+          if ls crates/*/Cargo.toml >/dev/null 2>&1; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.crates.outputs.present == 'true'
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.crates.outputs.present == 'true'
+      - name: Format
+        if: steps.crates.outputs.present == 'true'
+        run: cargo fmt --all --check
+      - name: Lint
+        if: steps.crates.outputs.present == 'true'
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Test
+        if: steps.crates.outputs.present == 'true'
+        run: cargo test --workspace --all-features
+      - name: Every crate is MIT OR Apache-2.0 and publishable
+        if: steps.crates.outputs.present == 'true'
+        run: |
+          cargo metadata --no-deps --format-version 1 | python3 -c '
+          import json, sys
+          bad = [p["name"] for p in json.load(sys.stdin)["packages"]
+                 if p.get("license") != "MIT OR Apache-2.0" or not p["name"].startswith("levix-") or p.get("publish") == []]
+          sys.exit("crates breaking the repository rules (license, levix- prefix, publish): " + ", ".join(bad) if bad else 0)'
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        if: steps.crates.outputs.present == 'true'
